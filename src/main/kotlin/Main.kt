@@ -1,4 +1,5 @@
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
@@ -58,25 +59,34 @@ fun App() {
 
     var dialog by remember { mutableStateOf<Action?>(null) }
     var edit by remember { mutableStateOf<User?>(null) }
-    fun close() = scope.launch {
-        dialog = null
-        edit = null
+    val locks = remember { mutableStateListOf<Long>() }
+
+    LaunchedEffect(dialog) {
+        if (dialog == null) edit?.let {
+            edit = null
+            client.unlock(it)
+        }
     }
 
     LaunchedEffect(users) {
         client.flow().flowOn(Dispatchers.IO).catch {
             println(it.message)
         }.collect { (action, data) ->
-            if (data.id == edit?.id) close()
             when(action) {
                 Action.Insert, Action.Update -> {
+                    if (data.id == edit?.id) dialog = null
                     val index = users.indexOfFirst { data.id == it.id }
                     if (index == -1)
                         users += data
                     else
                         users[index] = data
                 }
-                Action.Delete -> users.removeIf { data.id == it.id }
+                Action.Delete -> {
+                    if (data.id == edit?.id) dialog = null
+                    users.removeIf { data.id == it.id }
+                }
+                Action.Lock -> if (data.id != edit?.id) locks += data.id
+                Action.Unlock -> locks -= data.id
             }
         }
     }
@@ -84,6 +94,7 @@ fun App() {
     MaterialTheme {
         LazyColumn {
             items(users.sortedBy { it.id }, { it.id }) { user ->
+                val locked by remember { derivedStateOf { user.id in locks } }
                 Column(Modifier.animateItemPlacement()) {
                     val state = rememberSwipeToDismissBoxState()
                     LaunchedEffect(edit) {
@@ -97,15 +108,17 @@ fun App() {
                             dialog = Action.Update
                         }
                     }
-                    SwipeToDismissBox(state, {}) {
+                    SwipeToDismissBox(state, {},
+                        Modifier.background(if (locked) Color.LightGray else Color.White), !locked, !locked
+                    ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, null, tint = Color.LightGray)
                             Text(user.name, Modifier.padding(start = 8.dp).weight(1f))
-                            IconButton({ edit = user; dialog = Action.Update }, Modifier.size(32.dp)) {
-                                Icon(Icons.Default.Edit, null, tint = MaterialTheme.colorScheme.primary)
+                            IconButton({ edit = user; dialog = Action.Update }, Modifier.size(32.dp), !locked) {
+                                Icon(Icons.Default.Edit, null)
                             }
-                            IconButton({ delete(user.id) }, Modifier.size(32.dp)) {
-                                Icon(Icons.Default.Clear, null, tint = MaterialTheme.colorScheme.error)
+                            IconButton({ delete(user.id) }, Modifier.size(32.dp), !locked) {
+                                Icon(Icons.Default.Clear, null)
                             }
                             Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = Color.LightGray)
                         }
@@ -128,17 +141,18 @@ fun App() {
                     Action.Update -> edit?.copy(name = name.text)?.let(::update)
                     else -> {}
                 }
-                close()
+                dialog = null
             }
 
             val requester = remember { FocusRequester() }
             LaunchedEffect(Unit) {
+                edit?.let { client.lock(it) }
                 requester.requestFocus()
                 name = name.copy(selection = TextRange(0, name.text.length))
             }
 
             AlertDialog(
-                onDismissRequest = ::close,
+                onDismissRequest = { dialog = null },
                 title = { Text("User name") },
                 text = {
                     OutlinedTextField(name, { name = it }, Modifier.focusRequester(requester),

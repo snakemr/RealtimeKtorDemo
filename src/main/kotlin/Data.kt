@@ -1,4 +1,4 @@
-enum class Action { Update, Insert, Delete }
+enum class Action { Lock, Unlock, Update, Insert, Delete }
 
 data class DataAction <out T>(val action: Action, val data: T)
 

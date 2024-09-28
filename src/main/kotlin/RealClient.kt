@@ -7,8 +7,10 @@ import io.ktor.client.request.*
 import io.ktor.client.request.forms.*
 import io.ktor.http.*
 import io.ktor.serialization.gson.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 class RealClient {
     private val host = "localhost"
@@ -39,8 +41,18 @@ class RealClient {
             setBody(user)
         }.status
 
+    private val userLocks = Channel<DataAction<User>>(Channel.UNLIMITED)
+
+    suspend fun lock(user: User) = userLocks.send(DataAction(Action.Lock, user))
+    suspend fun unlock(user: User) = userLocks.send(DataAction(Action.Unlock, user))
+
     fun flow() = flow {
         client.webSocket(HttpMethod.Get, host, port, path = "user") {
+            launch {
+                while (coroutineContext.isActive) {
+                    sendSerialized(userLocks.receive())
+                }
+            }
             while (coroutineContext.isActive) {
                 runCatching {
                     receiveDeserialized<DataAction<User>>()
